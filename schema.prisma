@@ -1,0 +1,158 @@
+// database schema for Tutor Management and Student Progress Monitoring System
+// PostgreSQL configuration with Prisma ORM
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  ADMIN
+  TUTOR
+  WALI_SISWA
+}
+
+enum SesiStatus {
+  DIJADWALKAN
+  SELESAI
+  DIBATALKAN
+}
+
+enum MilestoneStatus {
+  BELUM_MULAI
+  SEDANG_BERJALAN
+  SELESAI_DIKUASAI
+}
+
+model User {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  nama          String
+  role          Role      @default(WALI_SISWA)
+  passwordHash  String    // Hashed default password for invitation/login
+  hp            String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relationships
+  tutorProfile  Tutor?    @relation("UserToTutor")
+  siswaProfile  Siswa?    @relation("UserToSiswa")
+}
+
+model Tutor {
+  id         String     @id @default(uuid())
+  userId     String     @unique
+  user       User       @relation("UserToTutor", fields: [userId], references: [id], onDelete: Cascade)
+  mapel      String     // Spesialisasi mata pelajaran
+  honor      Int        // Tarif honor mengajar per sesi
+  status     String     // "Aktif" atau "Tidak Aktif"
+  createdAt  DateTime   @default(now())
+
+  // Relationships
+  schedules  Schedule[]
+  clocks     TutorClock[]
+  absenLogs  AbsenLog[]
+}
+
+model Siswa {
+  id         String     @id @default(uuid())
+  userId     String     @unique
+  user       User       @relation("UserToSiswa", fields: [userId], references: [id], onDelete: Cascade)
+  kelas      String     // Tingkat kelas (e.g., "Matematika SMP", "Fisika SMA")
+  wali       String     // Nama Wali Murid
+  biaya      Int        // Biaya les per sesi
+  status     String     // "Aktif" atau "Tidak Aktif"
+  catatan    String?
+  createdAt  DateTime   @default(now())
+
+  // Relationships
+  schedules  Schedule[]
+  journals   SessionLog[]
+  milestones SyllabusMilestone[]
+  scores     AssessmentScore[]
+}
+
+model TutorClock {
+  id          String    @id @default(uuid())
+  tutorId     String
+  tutor       Tutor     @relation(fields: [tutorId], references: [id], onDelete: Cascade)
+  clockIn     DateTime  @default(now())
+  clockOut    DateTime?
+  tgl         String    // YYYY-MM-DD
+  createdAt   DateTime  @default(now())
+  
+  // Link to session log required for clocking out
+  logsCreated SessionLog[]
+}
+
+model Schedule {
+  id          String     @id @default(uuid())
+  tgl         String     // YYYY-MM-DD
+  durasi      Int        // dalam menit
+  status      SesiStatus @default(DIJADWALKAN)
+  mapel       String
+  
+  // Relationships
+  siswaId     String
+  siswa       Siswa      @relation(fields: [siswaId], references: [id], onDelete: Cascade)
+  tutorId     String
+  tutor       Tutor      @relation(fields: [tutorId], references: [id], onDelete: Cascade)
+  
+  createdAt   DateTime   @default(now())
+
+  // One-to-one Journal Session log
+  sessionLog  SessionLog?
+}
+
+model SessionLog {
+  id             String     @id @default(uuid())
+  scheduleId     String?    @unique
+  schedule       Schedule?  @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
+  
+  tutorClockId   String?
+  tutorClock     TutorClock? @relation(fields: [tutorClockId], references: [id], onDelete: SetNull)
+
+  siswaId        String
+  siswa          Siswa      @relation(fields: [siswaId], references: [id], onDelete: Cascade)
+  
+  tgl            String     // YYYY-MM-DD
+  materi         String     // Bahan/topik yang diajarkan
+  pemahaman      Int        // Rating tingkat pemahaman siswa (1-5)
+  catatan        String?    // Catatan bimbingan khusus dari tutor
+  
+  createdAt      DateTime   @default(now())
+}
+
+model SyllabusMilestone {
+  id          String          @id @default(uuid())
+  siswaId     String
+  siswa       Siswa           @relation(fields: [siswaId], references: [id], onDelete: Cascade)
+  topik       String          // Nama Bab/Materi Silabus (e.g. "Aljabar Linear")
+  status      MilestoneStatus @default(BELUM_MULAI)
+  urutan      Int             @default(0)
+  updatedAt   DateTime        @updatedAt
+}
+
+model AssessmentScore {
+  id          String    @id @default(uuid())
+  siswaId     String
+  siswa       Siswa     @relation(fields: [siswaId], references: [id], onDelete: Cascade)
+  ujianNama   String    // Nama Kuis/Ujian
+  nilai       Int       // Nilai Evaluasi (0-100)
+  tgl         String    // Hari pelaksanaan kuis
+  createdAt   DateTime  @default(now())
+}
+
+model AbsenLog {
+  id          String    @id @default(uuid())
+  tutorId     String
+  tutor       Tutor     @relation(fields: [tutorId], references: [id], onDelete: Cascade)
+  tgl         String    // YYYY-MM-DD
+  status      String    // "Hadir", "Izin", "Absen"
+  ket         String?
+  createdAt   DateTime  @default(now())
+}

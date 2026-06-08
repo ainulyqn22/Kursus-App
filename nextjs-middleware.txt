@@ -1,0 +1,86 @@
+import { NextResponse } from 'next/server';
+import { auth } from '@/auth'; // Impor NextAuth v5 helper
+
+/**
+ * Next.js Edge Middleware untuk proteksi rute dinamis (RBAC)
+ * Membaca JSON Web Token (JWT) NextAuth secara instan untuk verifikasi hak akses.
+ */
+export default auth((req) => {
+  const { nextUrl } = req;
+  const isLoggedIn = !!req.auth;
+  const userRole = req.auth?.user?.role; // Ditambahkan lewat token/session callbacks
+
+  // Definisikan rute proteksi berdasarkan role masing-masing
+  const isApiRoute = nextUrl.pathname.startsWith('/api');
+  const isAdminRoute = nextUrl.pathname.startsWith('/admin');
+  const isTutorRoute = nextUrl.pathname.startsWith('/tutor');
+  const isSiswaRoute = nextUrl.pathname.startsWith('/siswa') || nextUrl.pathname.startsWith('/parent');
+  const isAuthPage = nextUrl.pathname.startsWith('/login') || nextUrl.pathname.startsWith('/auth');
+
+  // 1. Izinkan pemanggilan API publik atau asset static tanpa intervensi
+  if (isApiRoute && !isAdminRoute && !isTutorRoute && !isSiswaRoute) {
+    return NextResponse.next();
+  }
+
+  // 2. Jika user mencoba mengakses halaman khusus bimbingan belajar tetapi belum login
+  if (!isLoggedIn) {
+    // Jika itu adalah halaman login/auth, ijinkan lewat
+    if (isAuthPage) {
+      return NextResponse.next();
+    }
+    // Jika selain login, redirect paksa ke login page
+    const loginUrl = new URL('/login', nextUrl.origin);
+    loginUrl.searchParams.set('callbackUrl', nextUrl.pathname);
+    return NextResponse.redirect(loginUrl);
+  }
+
+  // 3. User sudah LOGIN - Proteksi spesifik berdasarkan tingkatan otorisasi (RBAC Guard)
+  if (isAuthPage) {
+    // Jika sudah login dan mencoba ke halaman login kembali, arahkan ke portal utama yang sesuai
+    if (userRole === 'ADMIN') {
+      return NextResponse.redirect(new URL('/admin/dashboard', nextUrl.origin));
+    } else if (userRole === 'TUTOR') {
+      return NextResponse.redirect(new URL('/tutor/portal', nextUrl.origin));
+    } else {
+      return NextResponse.redirect(new URL('/siswa/portal', nextUrl.origin));
+    }
+  }
+
+  // A. Guard untuk rute Koordinator / Admin (/admin/*)
+  if (isAdminRoute && userRole !== 'ADMIN') {
+    return NextResponse.redirect(new URL('/unauthorized?reason=admin-only', nextUrl.origin));
+  }
+
+  // B. Guard untuk rute Tutor / Pengajar (/tutor/*)
+  if (isTutorRoute && userRole !== 'TUTOR') {
+    // Admin diperbolehkan melihat portal tutor untuk monitoring visual
+    if (userRole !== 'ADMIN') {
+      return NextResponse.redirect(new URL('/unauthorized?reason=tutor-only', nextUrl.origin));
+    }
+  }
+
+  // C. Guard untuk rute Siswa & Rapor Orang Tua (/siswa/* atau /parent/*)
+  if (isSiswaRoute && userRole !== 'WALI_SISWA') {
+    // Admin dan Tutor diperbolehkan melihat evaluasi perkembangan siswa (bypass)
+    if (userRole !== 'ADMIN' && userRole !== 'TUTOR') {
+      return NextResponse.redirect(new URL('/unauthorized?reason=parent-only', nextUrl.origin));
+    }
+  }
+
+  // Jika lolos semua validasi guard, lanjutkan request
+  return NextResponse.next();
+});
+
+// Konfigurasi matcher rute Next.js Middleware
+export const config = {
+  matcher: [
+    /*
+     * Cocokkan semua request path kecuali:
+     * - _next/static (static files)
+     * - _next/image (image optimization files)
+     * - favicon.ico (favicon file)
+     * - logo.png, dll (public static assets)
+     */
+    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+  ],
+};

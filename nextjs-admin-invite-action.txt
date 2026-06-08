@@ -1,0 +1,98 @@
+'use server';
+
+import { auth } from '@/auth'; // NextAuth.js v5 Auth integration helper
+import { PrismaClient, Role } from '@prisma/client';
+import bcrypt from 'bcryptjs';
+
+const prisma = new PrismaClient();
+
+interface CreateUserPayload {
+  email: string;
+  nama: string;
+  role: 'ADMIN' | 'TUTOR' | 'WALI_SISWA'; // Based on Schema Role enum
+  defaultPassword?: string;
+}
+
+/**
+ * Server Action: provisionNewUserAccount
+ * Hanya dapat dieksekusi oleh pengguna yang terautentikasi dengan Role ADMIN.
+ * Mendaftarkan akun baru (Tutor atau Wali Murid) secara manual dengan password default yang di-hash.
+ */
+export async function provisionNewUserAccount(payload: CreateUserPayload) {
+  try {
+    // 1. Verifikasi NextAuth Session & Otorisasi Admin
+    const session = await auth();
+    
+    if (!session || !session.user) {
+      return {
+        success: false,
+        error: 'Sesi kedaluwarsa. Silakan login kembali.'
+      };
+    }
+
+    if (session.user.role !== 'ADMIN') {
+      return {
+        success: false,
+        error: 'Akses ditolak: Hanya peran Koordinator / Admin yang diperbolehkan memprovisikan akun.'
+      };
+    }
+
+    // 2. Validasi Input Parameter
+    const { email, nama, role, defaultPassword } = payload;
+    if (!email || !nama || !role) {
+      return {
+        success: false,
+        error: 'Mohon lengkapi data email, nama lengkap, dan tipe peran (role) wajib!'
+      };
+    }
+
+    const targetEmail = email.trim().toLowerCase();
+    
+    // Antispit Registrasi Umum: pastikan user belum ada
+    const existingUser = await prisma.user.findUnique({
+      where: { email: targetEmail }
+    });
+
+    if (existingUser) {
+      return {
+        success: false,
+        error: 'Alamat email ini sudah terdaftar di sistem bimbingan belajar.'
+      };
+    }
+
+    // 3. Enkripsi/Hashing Password Default Menggunakan bcryptjs
+    const pwdToHash = defaultPassword || 'DefaultJoinKursus2026!';
+    const saltRounds = 10;
+    const passwordHash = await bcrypt.hash(pwdToHash, saltRounds);
+
+    // 4. Eksekusi Penyimpanan ke Database PostgreSQL via Prisma ORM
+    const createdUser = await prisma.user.create({
+      data: {
+        email: targetEmail,
+        nama: nama.trim(),
+        role: role as Role,
+        passwordHash, // Field aman yang ditambahkan di schema.prisma
+      }
+    });
+
+    // 5. Kembalikan data sukses beraliansi dengan logs
+    return {
+      success: true,
+      message: `Akun ${role} atas nama ${nama} berhasil diprovisikan!`,
+      data: {
+        id: createdUser.id,
+        email: createdUser.email,
+        nama: createdUser.nama,
+        role: createdUser.role,
+        createdAt: createdUser.createdAt
+      }
+    };
+
+  } catch (err: any) {
+    console.error('Error in provisionNewUserAccount Server Action:', err);
+    return {
+      success: false,
+      error: err.message || 'Terjadi kesalahan sistem internal server.'
+    };
+  }
+}

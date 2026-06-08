@@ -1,0 +1,105 @@
+import { NextResponse } from 'next/server';
+import { PrismaClient } from '@prisma/client';
+
+const prisma = new PrismaClient();
+
+/**
+ * POST /api/clock-out
+ * Simpan data clock-out absensi sekaligus menyimpan Jurnal Sesi Kelas
+ * dikoordinasikan dalam single database transaction ($transaction)
+ */
+export async function POST(request: Request) {
+  try {
+    const body = await request.json();
+    const {
+      tutorClockId,
+      tutorId,
+      siswaId,
+      scheduleId,
+      materi,
+      pemahaman,
+      catatan,
+      tgl
+    } = body;
+
+    // 1. Validasi Input Dasar
+    if (!tutorClockId || !tutorId || !siswaId || !materi || !pemahaman) {
+      return NextResponse.json(
+        { error: 'Mohon lengkapi semua data jurnal wajib (*)' },
+        { status: 400 }
+      );
+    }
+
+    const rating = parseInt(pemahaman, 10);
+    if (isNaN(rating) || rating < 1 || rating > 5) {
+      return NextResponse.json(
+        { error: 'Tingkat pemahaman siswa harus bernilai antara 1 sampai 5' },
+        { status: 400 }
+      );
+    }
+
+    // 2. Eksekusi database transaction untuk menjamin data integratif berkonsistensi tinggi
+    const result = await prisma.$transaction(async (tx) => {
+      // A. Verifikasi apakah data TutorClock ada dan belum di-clockout
+      const activeClock = await tx.tutorClock.findUnique({
+        where: { id: tutorClockId }
+      });
+
+      if (!activeClock) {
+        throw new Error('Sesi clock-in tutor tidak ditemukan');
+      }
+
+      if (activeClock.clockOut) {
+        throw new Error('Tutor sudah melakukan clock-out sebelumnya');
+      }
+
+      // B. Update data TutorClock dengan waktu saat ini (Clock Out)
+      const updatedClock = await tx.tutorClock.update({
+        where: { id: tutorClockId },
+        data: {
+          clockOut: new Date()
+        }
+      });
+
+      // C. Buat rekaman Jurnal Kelas (SessionLog) bimbingan belajar
+      const sessionLog = await tx.sessionLog.create({
+        data: {
+          tutorClockId: updatedClock.id,
+          siswaId,
+          scheduleId: scheduleId || null, 
+          tgl: tgl || new Date().toISOString().split('T')[0],
+          materi,
+          pemahaman: rating,
+          catatan: catatan || ''
+        }
+      });
+
+      // D. Jika ada scheduleId yang diasosiasikan, tandai Sesi tersebut SELESAI
+      if (scheduleId) {
+        await tx.schedule.update({
+          where: { id: scheduleId },
+          data: {
+            status: 'SELESAI'
+          }
+        });
+      }
+
+      return { clock: updatedClock, log: sessionLog };
+    });
+
+    return NextResponse.json({
+      success: true,
+      message: 'Berhasil melakukan Clock-out & Jurnal bimbingan tersimpan!',
+      data: result
+    });
+
+  } catch (error: any) {
+    console.error('Error saat memproses clock-out:', error);
+    return NextResponse.json(
+      { error: error.message || 'Terjadi kesalahan internal server' },
+      { status: 500 }
+    );
+  } finally {
+    await prisma.$disconnect();
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "Manajemen Kursus",
+  "description": "Sistem Manajemen Kursusan dengan Integrasi Google Sheets dan Email untuk Tutor, Member, Sesi Les, dan Keuangan.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
